@@ -1,0 +1,12 @@
+{
+    "display_name": "实时CSS编辑器",
+    "loading_order": 20,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "st-live-css-editor",
+    "version": "1.1.0",
+    "homePage": "",
+    "auto_update": false
+}
