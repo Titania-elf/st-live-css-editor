@@ -151,6 +151,9 @@ function applyImportedSettings(imported) {
         win.style.top = `${st.ui.y}px`;
         win.style.width = `${st.ui.w}px`;
         win.style.height = `${st.ui.h}px`;
+
+        applyCollapsedState(win, !!st.ui?.collapsed);
+        refreshCodeDecorations(win);
     }
 
     if (st.enabled) {
@@ -252,6 +255,70 @@ function setStatus(text) {
     if (el) el.textContent = text;
 }
 
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function buildLineNumbersText(text) {
+    const src = String(text ?? '');
+    const lineCount = (src.match(/\n/g) || []).length + 1;
+
+    let out = '';
+    for (let i = 1; i <= lineCount; i++) {
+        out += i + (i === lineCount ? '' : '\n');
+    }
+
+    return out;
+}
+
+function syncScrollFromEditor(win) {
+    const editor = win?.querySelector?.('.stlce-editor');
+    if (!editor) return;
+
+    const linenos = win.querySelector('.stlce-linenos');
+    if (linenos) {
+        linenos.scrollTop = editor.scrollTop;
+    }
+}
+
+function refreshCodeDecorations(win) {
+    const editor = win?.querySelector?.('.stlce-editor');
+    if (!editor) return;
+
+    const linenos = win.querySelector('.stlce-linenos');
+    if (linenos) {
+        linenos.textContent = buildLineNumbersText(editor.value);
+    }
+
+    syncScrollFromEditor(win);
+}
+
+function applyCollapsedState(win, collapsed) {
+    if (!win) return;
+
+    win.classList.toggle('collapsed', !!collapsed);
+
+    const icon = win.querySelector('.stlce-btn-minimize i');
+    if (icon) {
+        icon.classList.toggle('fa-window-minimize', !collapsed);
+        icon.classList.toggle('fa-window-maximize', !!collapsed);
+    }
+
+    if (collapsed) {
+        win.style.height = 'auto';
+        win.style.resize = 'none';
+    } else {
+        const s = ensureSettings();
+        win.style.height = `${s.ui.h}px`;
+        win.style.resize = 'both';
+    }
+}
+
 function clampWindowIntoViewport(ui) {
     const margin = 8;
     const vw = window.innerWidth;
@@ -292,6 +359,16 @@ function openWindow() {
                 <i class="fa-solid fa-paintbrush"></i>
                 <span>实时CSS编辑器</span>
             </div>
+            <div class="stlce-window-controls">
+                <button class="stlce-btn stlce-btn-icon stlce-btn-minimize" title="缩小/展开">
+                    <i class="fa-solid fa-window-minimize"></i>
+                </button>
+                <button class="stlce-btn stlce-btn-icon stlce-btn-close" title="关闭窗口">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        </div>
+        <div class="stlce-toolbar">
             <div class="stlce-actions">
                 <label class="stlce-toggle" title="启用/禁用注入">
                     <input type="checkbox" class="stlce-enabled" ${settings.enabled ? 'checked' : ''} />
@@ -318,13 +395,13 @@ function openWindow() {
                     <i class="fa-solid fa-eraser"></i>
                     清空
                 </button>
-                <button class="stlce-btn stlce-btn-close" title="关闭窗口">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
             </div>
         </div>
         <div class="stlce-body">
-            <textarea class="stlce-editor" spellcheck="false" placeholder="/* 在这里输入 CSS，将在 500ms 防抖后实时注入 */"></textarea>
+            <div class="stlce-editor-frame">
+                <pre class="stlce-linenos" aria-hidden="true"></pre>
+                <textarea class="stlce-editor" spellcheck="false" wrap="off" placeholder="/* 在这里输入 CSS，将在 500ms 防抖后实时注入 */"></textarea>
+            </div>
         </div>
         <div class="stlce-footer">
             <div class="stlce-status">就绪</div>
@@ -345,6 +422,9 @@ function openWindow() {
     // 填充文本
     const editor = win.querySelector('.stlce-editor');
     editor.value = draftCssText;
+    refreshCodeDecorations(win);
+
+    applyCollapsedState(win, !!settings.ui?.collapsed);
 
     // 立即应用一次（保证打开时可见）
     applyCss(settings.cssText);
@@ -358,6 +438,7 @@ function openWindow() {
             return;
         }
         const s = ensureSettings();
+        if (s.ui?.collapsed) return;
         s.ui.w = Math.round(win.getBoundingClientRect().width);
         s.ui.h = Math.round(win.getBoundingClientRect().height);
         saveSettingsDebounced();
@@ -419,6 +500,11 @@ function bindWindowEvents(win) {
     editor.addEventListener('input', () => {
         draftCssText = editor.value;
         schedulePreviewApply();
+        refreshCodeDecorations(win);
+    });
+
+    editor.addEventListener('scroll', () => {
+        syncScrollFromEditor(win);
     });
 
     win.querySelector('.stlce-btn-save').addEventListener('click', () => {
@@ -465,6 +551,7 @@ function bindWindowEvents(win) {
     win.querySelector('.stlce-btn-revert').addEventListener('click', () => {
         draftCssText = settings.cssText || '';
         editor.value = draftCssText;
+        refreshCodeDecorations(win);
         applyCss(draftCssText);
         setStatus('已回滚到已保存版本');
     });
@@ -472,9 +559,21 @@ function bindWindowEvents(win) {
     win.querySelector('.stlce-btn-clear').addEventListener('click', () => {
         draftCssText = '';
         editor.value = '';
+        refreshCodeDecorations(win);
         applyCss('');
         setStatus('已清空（未保存）');
     });
+
+    const minimizeBtn = win.querySelector('.stlce-btn-minimize');
+    if (minimizeBtn) {
+        minimizeBtn.addEventListener('click', () => {
+            const s = ensureSettings();
+            s.ui.collapsed = !s.ui.collapsed;
+            applyCollapsedState(win, s.ui.collapsed);
+            saveSettingsDebounced();
+            setStatus(s.ui.collapsed ? '已缩小' : '已展开');
+        });
+    }
 
     win.querySelector('.stlce-btn-close').addEventListener('click', () => {
         closeWindow();
@@ -531,7 +630,9 @@ function bindWindowEvents(win) {
         win.style.left = `${s.ui.x}px`;
         win.style.top = `${s.ui.y}px`;
         win.style.width = `${s.ui.w}px`;
-        win.style.height = `${s.ui.h}px`;
+        if (!s.ui?.collapsed) {
+            win.style.height = `${s.ui.h}px`;
+        }
     });
 }
 
